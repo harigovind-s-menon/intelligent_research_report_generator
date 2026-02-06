@@ -1,0 +1,40 @@
+# Core LLM/Agent framework
+langgraph>=0.2.0
+langchain>=0.3.0
+langchain-openai>=0.2.0
+langchain-community>=0.3.0
+
+# Search
+tavily-python>=0.5.0
+
+# Embeddings & ML
+sentence-transformers>=3.0.0
+transformers>=4.45.0
+scikit-learn>=1.5.0
+faiss-cpu>=1.8.0
+torch>=2.0.0
+
+# Database
+psycopg2-binary>=2.9.0
+pgvector>=0.3.0
+sqlalchemy>=2.0.0
+asyncpg>=0.29.0
+
+# Cache
+redis>=5.0.0
+
+# API
+fastapi>=0.115.0
+uvicorn[standard]>=0.32.0
+
+# Utilities
+python-dotenv>=1.0.0
+pydantic>=2.9.0
+pydantic-settings>=2.5.0
+httpx>=0.27.0
+
+# Development
+pytest>=8.0.0
+pytest-asyncio>=0.24.0
+black>=24.0.0
+ruff>=0.6.0
