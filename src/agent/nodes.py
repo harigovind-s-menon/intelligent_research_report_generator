@@ -144,6 +144,7 @@ def retriever_node(state: ResearchState) -> dict:
                 max_results=max_results_per_query,
                 include_raw_content=True,
             )
+
             # Handle case where results is None or malformed
             if results is None:
                 logger.warning(f"No results returned for '{sub_query}'")
@@ -155,9 +156,9 @@ def retriever_node(state: ResearchState) -> dict:
                 continue
 
             for result in result_list:
-                url = result.get("url", "")
                 if not isinstance(result, dict):
                     continue
+                url = result.get("url", "")
                 if url and url not in seen_urls:
                     seen_urls.add(url)
                     # Safely get content with fallbacks
