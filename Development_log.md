@@ -107,41 +107,6 @@ intelligent-research-report-generator/
                     FastAPI Backend (:8000)
 ```
 
-#### Key Components
-
-**1. ResearchState (`src/agent/state.py`)**
-- Central dataclass that flows through the graph
-- Contains: query info, sources, facts, contradictions, report sections, quality scores
-- Uses `QueryType` and `QueryComplexity` enums for classification
-
-**2. Agent Nodes (`src/agent/nodes.py`)**
-- `query_understanding_node`: LLM-based query analysis → type, complexity, sub-queries
-- `retriever_node`: Tavily search for each sub-query, deduplication
-- `analyzer_node`: LLM extracts facts, identifies contradictions
-- `writer_node`: LLM generates structured report with citations
-
-**3. Graph (`src/agent/graph.py`)**
-- Linear flow: query_understanding → retriever → analyzer → writer → END
-- Compiled with `StateGraph(ResearchState)`
-
-**4. API (`src/api/main.py`)**
-- FastAPI with full CRUD endpoints
-- Request/response models with Pydantic
-- Database logging and Redis caching
-
-**5. Database (`src/db/models.py`)**
-- SQLAlchemy model for `ResearchRequest`
-- Stores query, results, metadata, and timing
-
-**6. Cache (`src/db/cache.py`)**
-- Redis-based caching with 1-hour TTL
-- Cache key: SHA256 hash of normalized query
-
-**7. Frontend (`frontend/app.py`)**
-- Streamlit app with three tabs: New Research, History, View Report
-- Real-time health status in sidebar
-- Configurable API URL for deployment flexibility
-
 #### API Endpoints
 
 | Endpoint | Method | Description |
@@ -177,39 +142,6 @@ completed_at            TIMESTAMP
 - Bypass: Set `use_cache: false` in request body
 - Response includes `"cached": true/false` indicator
 
-### Configuration
-
-**Environment Variables (`.env`)**
-```
-OPENAI_API_KEY=sk-...
-TAVILY_API_KEY=tvly-...
-HUGGINGFACE_API_KEY=hf_...
-LANGSMITH_API_KEY=lsv2_...
-LANGCHAIN_TRACING_V2=true
-LANGCHAIN_PROJECT=research-report-generator
-DATABASE_URL=postgresql://postgres:localdev@localhost:5432/research_reports
-REDIS_URL=redis://localhost:6379
-S3_BUCKET_NAME=intelligent-research-report-generator
-AWS_ACCESS_KEY_ID=...
-AWS_SECRET_ACCESS_KEY=...
-AWS_DEFAULT_REGION=eu-north-1
-```
-
-### Running the Application
-
-**Terminal 1 — Backend:**
-```bash
-uvicorn src.api.main:app --reload
-# API available at http://localhost:8000
-# Docs at http://localhost:8000/docs
-```
-
-**Terminal 2 — Frontend:**
-```bash
-streamlit run frontend/app.py
-# UI available at http://localhost:8501
-```
-
 ### Test Results
 
 **First successful run:**
@@ -221,13 +153,6 @@ Sources Retrieved: 13
 Facts Extracted: 7
 Contradictions Found: 0
 ```
-
-**Infrastructure verified:**
-- Health check shows all services healthy (postgres, redis, agent)
-- Caching works — repeated queries return instantly with `"cached": true`
-- History endpoint returns logged requests
-- Retrieval by ID works
-- Streamlit frontend connects to API and displays results
 
 ### Issues & Fixes
 
@@ -242,6 +167,188 @@ Contradictions Found: 0
 3. **Missing redis package**
    - Problem: `ModuleNotFoundError: No module named 'redis'`
    - Fix: Added `redis` to dependencies, installed via `uv pip install redis`
+
+---
+
+## Phase 2: Traditional ML ✅
+
+**Status:** Complete  
+**Dates:** Feb 12, 2026
+
+### Goals
+- Add scikit-learn query classifier to replace LLM-based classification
+- Implement sentence embeddings for semantic similarity
+- Set up pgvector for document storage and retrieval
+
+### What Was Built
+
+#### Query Classifier (`src/models/query_classifier.py`)
+
+A scikit-learn pipeline that classifies queries into 5 types:
+- `factual` — Simple fact lookup
+- `exploratory` — Open-ended research
+- `comparative` — Compare multiple things
+- `analytical` — Deep analysis required
+- `current_events` — Recent news/events
+
+**Architecture:**
+```
+┌─────────────┐     ┌─────────────┐     ┌─────────────┐
+│   Query     │────▶│   TF-IDF    │────▶│  Logistic   │────▶ Query Type
+│   Text      │     │ Vectorizer  │     │ Regression  │
+└─────────────┘     └─────────────┘     └─────────────┘
+```
+
+**Training Data:**
+- Generated synthetically using templates + fill-in values
+- 1000 training samples (200 per class)
+- 250 test samples (50 per class)
+- Templates cover various phrasings for each query type
+
+**Model Performance:**
+```
+Training accuracy: 98.50%
+Test accuracy:     95.20%
+```
+
+**Classification Report:**
+```
+                precision    recall  f1-score   support
+       factual       0.94      0.98      0.96        50
+   exploratory       0.94      0.92      0.93        50
+   comparative       0.98      1.00      0.99        50
+    analytical       0.92      0.88      0.90        50
+current_events       0.98      0.98      0.98        50
+```
+
+#### Sentence Embeddings (`src/models/embeddings.py`)
+
+Uses sentence-transformers for generating document embeddings.
+
+**Model:** `all-MiniLM-L6-v2`
+- Embedding dimension: 384
+- Fast inference on CPU
+- Good balance of speed and quality
+
+**Features:**
+- Single text embedding
+- Batch embedding for efficiency
+- Cosine similarity computation
+- Find most similar texts
+
+#### Vector Store (`src/db/vector_store.py`)
+
+PostgreSQL with pgvector extension for semantic search.
+
+**Documents table:**
+```sql
+id          SERIAL PRIMARY KEY
+url         VARCHAR(2048) UNIQUE
+title       VARCHAR(512)
+content     TEXT
+snippet     TEXT
+embedding   vector(384)
+created_at  TIMESTAMP
+updated_at  TIMESTAMP
+```
+
+**Features:**
+- Store documents with embeddings
+- Semantic similarity search
+- Deduplication by URL
+- IVFFlat index for fast search
+
+#### Integration with Agent
+
+**Query Understanding Node (Hybrid ML + LLM):**
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    Query Understanding Node                     │
+│                                                                 │
+│  1. ML Classifier (fast, free)                                  │
+│     ├─ Confidence ≥ 50% → Use ML result                        │
+│     └─ Confidence < 50% → Fall back to LLM                     │
+│                                                                 │
+│  2. LLM (still used for):                                       │
+│     ├─ Complexity assessment (simple/moderate/complex)          │
+│     ├─ Query decomposition (sub-queries)                        │
+│     └─ Research plan generation                                 │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+**Retriever Node (with Vector Store):**
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                       Retriever Node                            │
+│                                                                 │
+│  For each sub-query:                                            │
+│  1. Search via Tavily API                                       │
+│  2. Deduplicate by URL                                          │
+│  3. Store in pgvector with embedding ◀─── NEW                   │
+│                                                                 │
+│  Documents accumulate across queries for future semantic search │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+#### Files Added
+
+```
+src/models/
+├── __init__.py                 # Package exports
+├── generate_training_data.py   # Synthetic data generation
+├── query_classifier.py         # Classifier model
+├── train.py                    # Training script
+└── embeddings.py               # Sentence embeddings
+
+src/db/
+├── vector_store.py             # pgvector document store
+
+data/
+├── query_classification_train.json  # 1000 training samples
+└── query_classification_test.json   # 250 test samples
+
+models/
+└── query_classifier.joblib     # Trained model
+```
+
+### Test Results
+
+**ML Classifier in Action:**
+```
+Query: "What is the capital of France?"
+ML classifier: factual (confidence: 86.82%)
+Using ML classification: factual
+
+Query: "What are the latest developments in quantum computing?"
+ML classifier: current_events (confidence: 66.23%)
+Using ML classification: current_events
+
+Query: "What are recent advances in AI?"
+ML classifier: current_events (confidence: 60.67%)
+Using ML classification: current_events
+Sources Retrieved: 25
+Documents stored in vector store: 28+
+```
+
+**Vector Store Search:**
+```
+Query: "quantum computing advances"
+Result: Quantum Computing Breakthrough (similarity: 0.787)
+```
+
+### Issues & Fixes
+
+1. **Deprecated scikit-learn parameter**
+   - Problem: `LogisticRegression.__init__() got an unexpected keyword argument 'multi_class'`
+   - Fix: Removed `multi_class="multinomial"` (default behavior in newer versions)
+
+2. **Zero sub-queries from LLM**
+   - Problem: Simple queries returned 0 sub-queries, leading to no sources
+   - Fix: Added fallback to use original query if sub_queries is empty
+
+3. **pgvector type casting**
+   - Problem: `operator does not exist: vector <=> numeric[]`
+   - Fix: Changed `::vector` to `CAST(:embedding AS vector)` to avoid SQLAlchemy parameter binding conflicts
 
 ---
 
@@ -307,6 +414,45 @@ Contradictions Found: 0
 - Deploys easily to AWS (ECS, App Runner, EC2)
 - Can be replaced with React later if needed
 
+### Decision 8: Hybrid ML + LLM Classification
+**Date:** Feb 12, 2026  
+**Decision:** Use ML classifier with LLM fallback for query type classification  
+**Rationale:**
+- ML classifier is faster and free (no API cost)
+- 95% accuracy is sufficient for routing decisions
+- 50% confidence threshold catches uncertain cases
+- LLM provides fallback for edge cases and novel phrasings
+- Reduces LLM token usage without sacrificing quality
+
+### Decision 9: Synthetic Training Data
+**Date:** Feb 12, 2026  
+**Decision:** Generate synthetic training data using templates  
+**Rationale:**
+- Fast to create (vs. manual labeling)
+- Covers diverse phrasings for each query type
+- Reproducible (seeded random generation)
+- Good enough for initial model (95% accuracy achieved)
+- Can be augmented with real user queries later
+
+### Decision 10: all-MiniLM-L6-v2 for Embeddings
+**Date:** Feb 12, 2026  
+**Decision:** Use all-MiniLM-L6-v2 sentence transformer model  
+**Rationale:**
+- 384 dimensions (compact, fast)
+- Good quality for semantic similarity
+- Fast inference on CPU
+- Widely used and well-tested
+- Can upgrade to all-mpnet-base-v2 (768 dims) if needed
+
+### Decision 11: Store Retrieved Documents in pgvector
+**Date:** Feb 12, 2026  
+**Decision:** Automatically store all retrieved documents in vector store  
+**Rationale:**
+- Builds up a knowledge base over time
+- Enables future semantic search across past research
+- Deduplication by URL prevents redundant storage
+- Foundation for RAG-style retrieval augmentation
+
 ---
 
 ## Resources
@@ -317,6 +463,8 @@ Contradictions Found: 0
 - [pgvector](https://github.com/pgvector/pgvector)
 - [Tavily API](https://docs.tavily.com/)
 - [Streamlit Docs](https://docs.streamlit.io/)
+- [scikit-learn Pipelines](https://scikit-learn.org/stable/modules/compose.html)
+- [sentence-transformers](https://www.sbert.net/)
 
 ### Tutorials
 - [LangGraph Quick Start](https://langchain-ai.github.io/langgraph/tutorials/introduction/)
@@ -354,3 +502,29 @@ Contradictions Found: 0
   - Real-time health status in sidebar
   - Configurable API URL for deployment
   - Displays report, sources, and extracted facts
+
+### 2026-02-12
+- **Phase 2: Traditional ML — Complete**
+- Built query classifier using scikit-learn
+  - TF-IDF vectorizer + Logistic Regression pipeline
+  - 98.5% training accuracy, 95.2% test accuracy
+  - Synthetic training data generator (1000 samples)
+- Integrated classifier into `query_understanding_node`
+  - ML classifier runs first (fast, free)
+  - Falls back to LLM if confidence < 50%
+  - LLM still handles complexity and decomposition
+- Added sentence embeddings (`src/models/embeddings.py`)
+  - all-MiniLM-L6-v2 model (384 dimensions)
+  - Single and batch embedding support
+  - Cosine similarity utilities
+- Added pgvector document store (`src/db/vector_store.py`)
+  - Documents table with vector column
+  - Semantic similarity search
+  - IVFFlat index for performance
+- Integrated vector store into retriever node
+  - All retrieved documents automatically stored with embeddings
+  - Deduplication by URL
+  - Building knowledge base for future semantic search
+- Fixed deprecated `multi_class` parameter in scikit-learn
+- Fixed zero sub-queries fallback
+- Fixed pgvector CAST syntax for SQLAlchemy compatibility

@@ -22,6 +22,9 @@ from src.agent.state import (
     Source,
 )
 from src.config import get_settings
+from src.db import vector_store
+from src.models.query_classifier import get_classifier
+from src.db.vector_store import get_vector_store
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +32,9 @@ logger = logging.getLogger(__name__)
 settings = get_settings()
 llm = ChatOpenAI(model="gpt-4o-mini", api_key=settings.openai_api_key)
 tavily_client = TavilyClient(api_key=settings.tavily_api_key)
+
+# Confidence threshold for ML classifier (below this, use LLM)
+CLASSIFIER_CONFIDENCE_THRESHOLD = 0.5
 
 
 # =============================================================================
@@ -41,14 +47,58 @@ def query_understanding_node(state: ResearchState) -> dict:
     Analyze the input query to understand its type, complexity, and create a research plan.
 
     This node:
-    - Classifies the query type (factual, exploratory, etc.)
-    - Assesses complexity
-    - Decomposes complex queries into sub-queries
+    - Classifies the query type using ML classifier (fast, cheap)
+    - Falls back to LLM if confidence is low
+    - Uses LLM for complexity assessment and query decomposition
     - Creates a research plan
     """
     logger.info(f"Query understanding for: {state.original_query}")
 
-    prompt = f"""Analyze this research query and provide a structured analysis.
+    # Step 1: Try ML classifier first
+    query_type = None
+    classifier_used = False
+    
+    try:
+        classifier = get_classifier()
+        if classifier.is_loaded:
+            predicted_type, confidence = classifier.predict_with_confidence(state.original_query)
+            logger.info(f"ML classifier: {predicted_type} (confidence: {confidence:.2%})")
+            
+            if confidence >= CLASSIFIER_CONFIDENCE_THRESHOLD:
+                query_type = QueryType(predicted_type)
+                classifier_used = True
+                logger.info(f"Using ML classification: {query_type.value}")
+            else:
+                logger.info(f"Confidence too low ({confidence:.2%}), falling back to LLM")
+    except Exception as e:
+        logger.warning(f"ML classifier failed: {e}, falling back to LLM")
+
+    # Step 2: Use LLM for complexity, sub-queries, and optionally query_type
+    if classifier_used:
+        # Simpler prompt - just need complexity and decomposition
+        prompt = f"""Analyze this research query and provide a structured analysis.
+
+Query: {state.original_query}
+Query Type (already classified): {query_type.value}
+
+Respond with valid JSON only:
+{{
+    "complexity": "simple|moderate|complex",
+    "sub_queries": ["list", "of", "sub-questions", "to", "research"],
+    "research_plan": {{
+        "approach": "description of how to research this",
+        "key_aspects": ["aspect1", "aspect2"],
+        "expected_sources": ["type of sources to look for"]
+    }}
+}}
+
+Complexity guidelines:
+- simple: Can be answered with 1-2 searches
+- moderate: Needs 3-5 searches and synthesis
+- complex: Needs deep research, multiple perspectives"""
+    else:
+        # Full prompt - need everything from LLM
+        prompt = f"""Analyze this research query and provide a structured analysis.
 
 Query: {state.original_query}
 
@@ -86,11 +136,19 @@ Guidelines:
             if content.startswith("json"):
                 content = content[4:]
         analysis = json.loads(content)
+        # Ensure at least 1 sub-query (use original query as fallback)
+        sub_queries = analysis.get("sub_queries", [])
+        if not sub_queries:
+            sub_queries = [state.original_query]
+            logger.info("No sub-queries from LLM, using original query")
+
+        # Use ML classifier result if available, otherwise use LLM result
+        final_query_type = query_type if classifier_used else QueryType(analysis["query_type"])
 
         return {
-            "query_type": QueryType(analysis["query_type"]),
+            "query_type": final_query_type,
             "query_complexity": QueryComplexity(analysis["complexity"]),
-            "sub_queries": analysis["sub_queries"],
+            "sub_queries": sub_queries,
             "research_plan": analysis["research_plan"],
             "current_step": "retrieval",
         }
@@ -98,7 +156,7 @@ Guidelines:
         logger.error(f"Failed to parse query analysis: {e}")
         # Fallback to defaults
         return {
-            "query_type": QueryType.EXPLORATORY,
+            "query_type": query_type if classifier_used else QueryType.EXPLORATORY,
             "query_complexity": QueryComplexity.MODERATE,
             "sub_queries": [state.original_query],
             "research_plan": {"approach": "general research", "key_aspects": [], "expected_sources": []},
@@ -122,6 +180,8 @@ def retriever_node(state: ResearchState) -> dict:
     - Stores source content for later analysis
     """
     logger.info(f"Retrieving sources for {len(state.sub_queries)} sub-queries")
+    # Get vector store for storing retrieved documents
+    vector_store = get_vector_store()
 
     all_sources: list[Source] = []
     search_queries_used: list[str] = []
@@ -161,6 +221,16 @@ def retriever_node(state: ResearchState) -> dict:
                 url = result.get("url", "")
                 if url and url not in seen_urls:
                     seen_urls.add(url)
+                    # Store in vector store for future semantic search
+                    try:
+                        vector_store.add_document(
+                            url=url,
+                            title=result.get("title", ""),
+                            content=result.get("content", "") or result.get("raw_content", ""),
+                            snippet=result.get("content", "")[:500] if result.get("content") else None,
+                        )
+                    except Exception as e:
+                        logger.warning(f"Failed to store document in vector store: {e}")
                     # Safely get content with fallbacks
                     raw_content = result.get("raw_content") or ""
                     content = result.get("content") or ""

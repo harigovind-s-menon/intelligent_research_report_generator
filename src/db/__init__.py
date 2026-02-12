@@ -7,6 +7,12 @@ from src.db.cache import (
     set_cached_result,
 )
 from src.db.models import Base, ResearchRequest, SessionLocal, get_db, init_db
+from src.db.vector_store import (
+    VectorStore,
+    get_vector_store,
+    init_vector_store,
+    Document,
+)
 
 __all__ = [
     "Base",
@@ -18,4 +24,8 @@ __all__ = [
     "set_cached_result",
     "invalidate_cache",
     "check_redis_health",
+    "VectorStore",
+    "get_vector_store",
+    "init_vector_store",
+    "Document",
 ]

@@ -1,10 +1,25 @@
-"""ML models for query classification and embeddings.
+"""ML models for query classification and embeddings."""
 
-This module will contain:
-- Query classifier (scikit-learn baseline + fine-tuned transformer)
-- Embedding models for semantic search
-- Document clustering
-"""
+from src.models.query_classifier import (
+    QueryClassifier,
+    get_classifier,
+    train_classifier,
+    QUERY_TYPES,
+)
+from src.models.embeddings import (
+    EmbeddingModel,
+    get_embedding_model,
+    embed_text,
+    embed_texts,
+)
 
-# Phase 2: Add query classifier
-# Phase 2: Add embedding models
+__all__ = [
+    "QueryClassifier",
+    "get_classifier", 
+    "train_classifier",
+    "QUERY_TYPES",
+    "EmbeddingModel",
+    "get_embedding_model",
+    "embed_text",
+    "embed_texts",
+]
