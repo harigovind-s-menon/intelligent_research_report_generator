@@ -284,7 +284,7 @@ updated_at  TIMESTAMP
 │  For each sub-query:                                            │
 │  1. Search via Tavily API                                       │
 │  2. Deduplicate by URL                                          │
-│  3. Store in pgvector with embedding ◀─── NEW                   │
+│  3. Store in pgvector with embedding                            │
 │                                                                 │
 │  Documents accumulate across queries for future semantic search │
 └─────────────────────────────────────────────────────────────────┘
@@ -349,6 +349,183 @@ Result: Quantum Computing Breakthrough (similarity: 0.787)
 3. **pgvector type casting**
    - Problem: `operator does not exist: vector <=> numeric[]`
    - Fix: Changed `::vector` to `CAST(:embedding AS vector)` to avoid SQLAlchemy parameter binding conflicts
+
+---
+
+## Phase 3: Evaluation Pipeline ✅
+
+**Status:** Complete  
+**Dates:** Feb 12, 2026
+
+### Goals
+- Build metrics to measure retrieval quality
+- Evaluate factual grounding of extracted facts
+- Assess report structure and quality
+- Track performance metrics
+- Integrate evaluation into API endpoints
+
+### What Was Built
+
+#### Evaluation Metrics (`src/evaluation/metrics.py`)
+
+Four categories of metrics with an overall weighted score:
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                      Evaluation Pipeline                        │
+│                                                                 │
+│  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐  ┌────────┐ │
+│  │  Retrieval  │  │  Grounding  │  │   Report    │  │ Perf   │ │
+│  │   (30%)     │  │   (30%)     │  │   (40%)     │  │        │ │
+│  └─────────────┘  └─────────────┘  └─────────────┘  └────────┘ │
+│        │                │                │               │      │
+│        ▼                ▼                ▼               ▼      │
+│   Semantic         Fact vs Source    Structure      Time,      │
+│   Similarity       Verification      Analysis       API Calls  │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+                      Overall Score (0-1)
+```
+
+#### Retrieval Metrics
+Measures how relevant retrieved sources are to the original query.
+
+| Metric | Description |
+|--------|-------------|
+| `num_sources` | Total sources retrieved |
+| `avg_relevance_score` | Mean semantic similarity (query ↔ source) |
+| `min_relevance_score` | Lowest relevance source |
+| `max_relevance_score` | Highest relevance source |
+
+**Method:** Embeds query and each source's title+snippet, computes cosine similarity.
+
+#### Fact Grounding Metrics
+Verifies that extracted facts are supported by their cited sources.
+
+| Metric | Description |
+|--------|-------------|
+| `num_facts` | Total facts extracted |
+| `num_grounded` | Facts with supporting evidence |
+| `num_ungrounded` | Facts without clear support |
+| `grounding_rate` | Percentage grounded (0-1) |
+| `avg_confidence` | Mean confidence of facts |
+
+**Method:** Embeds each fact's claim and its source content, considers grounded if similarity > 0.3.
+
+#### Report Quality Metrics
+Evaluates report structure and completeness.
+
+| Metric | Description |
+|--------|-------------|
+| `has_executive_summary` | Contains summary section |
+| `has_key_findings` | Contains findings section |
+| `has_conclusion` | Contains conclusion |
+| `has_sources_section` | Lists sources/references |
+| `num_sections` | Total markdown sections |
+| `num_citations` | Number of citations |
+| `word_count` | Total words |
+| `structure_score` | Overall structure (0-1) |
+
+**Method:** Rule-based checks for expected sections and formatting.
+
+#### Performance Metrics
+Tracks operational performance.
+
+| Metric | Description |
+|--------|-------------|
+| `total_time_seconds` | End-to-end processing time |
+| `num_llm_calls` | LLM API calls made |
+| `num_search_calls` | Search API calls made |
+
+#### Overall Score Formula
+```
+overall_score = 0.30 × avg_relevance_score 
+              + 0.30 × grounding_rate 
+              + 0.40 × structure_score
+```
+
+Weights prioritize report quality (40%) as the final deliverable, with retrieval and grounding equally weighted (30% each).
+
+#### API Integration
+
+Evaluation runs automatically on every research request:
+
+```python
+# In POST /research response:
+{
+  "query": "...",
+  "report": "...",
+  "sources": [...],
+  "facts": [...],
+  "evaluation": {
+    "overall_score": 0.91,
+    "retrieval": {...},
+    "grounding": {...},
+    "report_quality": {...},
+    "performance": {...}
+  }
+}
+```
+
+Also available when fetching historical results via `GET /research/{id}`.
+
+#### Files Added
+
+```
+src/evaluation/
+├── __init__.py    # Package exports
+└── metrics.py     # Evaluation classes and functions
+```
+
+### Test Results
+
+**Sample Evaluation Output:**
+```
+Query: "What are Machine Learning and Deep Learning?"
+
+Overall Score: 91.27%
+
+Retrieval:
+  Sources: 10
+  Avg Relevance: 70.89%
+  Min Relevance: 62.91%
+  Max Relevance: 77.89%
+
+Grounding:
+  Facts: 7
+  Grounded: 7 (100%)
+  Avg Confidence: 88.57%
+
+Report Quality:
+  Structure Score: 100%
+  Has Executive Summary: ✓
+  Has Key Findings: ✓
+  Has Conclusion: ✓
+  Has Sources: ✓
+  Sections: 10
+  Citations: 10
+  Word Count: 716
+
+Performance:
+  Total Time: 69.75s
+  LLM Calls: 3
+  Search Calls: 5
+```
+
+### Issues & Fixes
+
+1. **Evaluation returning null**
+   - Problem: Evaluation code in wrong location, variables undefined
+   - Fix: Added proper try/catch block with `evaluation_dict` variable
+
+2. **Grounding rate always 0%**
+   - Problem: Looking for `content` field but sources only have `snippet`
+   - Fix: Changed to `s.get('content') or s.get('snippet', '')`
+
+3. **Undefined eval_result in get_by_id**
+   - Problem: `eval_result` referenced but never defined in endpoint
+   - Fix: Added full evaluation block to `GET /research/{id}` endpoint
 
 ---
 
@@ -453,6 +630,25 @@ Result: Quantum Computing Breakthrough (similarity: 0.787)
 - Deduplication by URL prevents redundant storage
 - Foundation for RAG-style retrieval augmentation
 
+### Decision 12: Semantic Similarity for Evaluation
+**Date:** Feb 12, 2026  
+**Decision:** Use embedding-based semantic similarity for retrieval and grounding metrics  
+**Rationale:**
+- More nuanced than keyword matching
+- Captures meaning rather than exact words
+- Reuses existing embedding infrastructure
+- Provides continuous scores (0-1) rather than binary
+- Consistent with modern NLP evaluation approaches
+
+### Decision 13: Weighted Overall Score
+**Date:** Feb 12, 2026  
+**Decision:** Weight report quality (40%) higher than retrieval and grounding (30% each)  
+**Rationale:**
+- Report is the final deliverable users see
+- Well-structured report can compensate for minor retrieval gaps
+- Grounding ensures factual accuracy, critical for trust
+- Balanced approach that values end output while maintaining quality standards
+
 ---
 
 ## Resources
@@ -528,3 +724,17 @@ Result: Quantum Computing Breakthrough (similarity: 0.787)
 - Fixed deprecated `multi_class` parameter in scikit-learn
 - Fixed zero sub-queries fallback
 - Fixed pgvector CAST syntax for SQLAlchemy compatibility
+
+- **Phase 3: Evaluation Pipeline — Complete**
+- Built evaluation metrics (`src/evaluation/metrics.py`)
+  - RetrievalMetrics: semantic similarity between query and sources
+  - FactGroundingMetrics: verify facts are supported by cited sources
+  - ReportQualityMetrics: structure, sections, citations, word count
+  - PerformanceMetrics: time, LLM calls, search calls
+  - Overall weighted score (30% retrieval, 30% grounding, 40% report)
+- Integrated evaluation into API
+  - `POST /research` returns evaluation in response
+  - `GET /research/{id}` also includes evaluation
+- Fixed grounding metric to use snippet when content unavailable
+- Fixed undefined variable in get_by_id endpoint
+- Achieved 91%+ overall score on test queries

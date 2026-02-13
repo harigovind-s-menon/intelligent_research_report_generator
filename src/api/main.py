@@ -3,6 +3,7 @@
 import logging
 from contextlib import asynccontextmanager
 from datetime import datetime
+from typing import Optional
 
 from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
@@ -15,6 +16,7 @@ from src.agent.state import ResearchState
 from src.config import get_settings
 from src.db.cache import check_redis_health, get_cached_result, set_cached_result
 from src.db.models import ResearchRequest, SessionLocal, get_db, init_db
+from src.evaluation import get_evaluator
 
 # Configure logging
 logging.basicConfig(
@@ -108,6 +110,7 @@ class ResearchResponse(BaseModel):
     complexity: str | None
     processing_time_seconds: float
     cached: bool = False
+    evaluation: Optional[dict] = None  # NEW: evaluation metrics
 
 
 class HealthResponse(BaseModel):
@@ -268,8 +271,24 @@ async def generate_research(
         # Cache the result
         cache_data = {**response_data, "sources": [s.model_dump() for s in sources], "facts": [f.model_dump() for f in facts]}
         set_cached_result(request.query, cache_data)
+        # Run evaluation
+        evaluation_dict = None
+        try:
+            evaluator = get_evaluator()
+            eval_result = evaluator.evaluate(
+                query=request.query,
+                sources=[s.model_dump() for s in sources],
+                facts=[f.model_dump() for f in facts],
+                report=result.get("final_report", ""),
+                processing_time=processing_time,
+                num_llm_calls=3,
+                num_search_calls=len(result.get("search_queries_used", [])),
+            )
+            evaluation_dict = eval_result.to_dict()
+        except Exception as e:
+            logger.error(f"Evaluation failed: {e}")
 
-        return ResearchResponse(**response_data, cached=False)
+        return ResearchResponse(**response_data, cached=False, evaluation=evaluation_dict)
 
     except Exception as e:
         logger.error(f"Research failed: {e}")
@@ -319,7 +338,22 @@ async def get_research_by_id(
         
         sources = [SourceResponse(**s) for s in (result.sources_json or [])]
         facts = [FactResponse(**f) for f in (result.facts_json or [])]
-        
+                
+        # Run evaluation on stored result
+        evaluation_dict = None
+        try:
+            evaluator = get_evaluator()
+            eval_result = evaluator.evaluate(
+                query=result.query,
+                sources=[s.model_dump() for s in sources],
+                facts=[f.model_dump() for f in facts],
+                report=result.report or "",
+                processing_time=result.processing_time_seconds or 0,
+            )
+            evaluation_dict = eval_result.to_dict()
+        except Exception as e:
+            logger.error(f"Evaluation failed: {e}")
+                
         return ResearchResponse(
             query=result.query,
             report=result.report or "",
@@ -329,6 +363,7 @@ async def get_research_by_id(
             complexity=result.complexity,
             processing_time_seconds=result.processing_time_seconds or 0,
             cached=False,
+            evaluation=evaluation_dict,
         )
     except HTTPException:
         raise

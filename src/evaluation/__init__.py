@@ -1,11 +1,21 @@
-"""Evaluation metrics and pipelines.
+"""Evaluation metrics and quality assessment."""
 
-This module will contain:
-- Retrieval quality metrics (precision, recall, NDCG)
-- Generation quality metrics (coherence, factual accuracy)
-- Human feedback collection
-- A/B testing framework
-"""
+from src.evaluation.metrics import (
+    ResearchEvaluator,
+    EvaluationResult,
+    RetrievalMetrics,
+    FactGroundingMetrics,
+    ReportQualityMetrics,
+    PerformanceMetrics,
+    get_evaluator,
+)
 
-# Phase 3: Add evaluation metrics
-# Phase 3: Add human feedback UI
+__all__ = [
+    "ResearchEvaluator",
+    "EvaluationResult",
+    "RetrievalMetrics",
+    "FactGroundingMetrics",
+    "ReportQualityMetrics",
+    "PerformanceMetrics",
+    "get_evaluator",
+]
