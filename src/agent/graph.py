@@ -2,7 +2,9 @@
 
 This module defines the graph structure that orchestrates the research pipeline.
 """
-
+import os
+from dotenv import load_dotenv
+load_dotenv()
 import logging
 
 from langgraph.graph import END, StateGraph
