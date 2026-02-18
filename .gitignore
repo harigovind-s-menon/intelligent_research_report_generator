@@ -3,6 +3,7 @@
 .venv/
 venv/
 env/
+!.env.example
 
 # Python
 __pycache__/
@@ -57,6 +58,7 @@ logs/
 
 # Docker
 docker-compose.override.yml
+.docker/
 
 # OS
 .DS_Store
@@ -64,3 +66,21 @@ Thumbs.db
 
 # Jupyter
 .ipynb_checkpoints/
+
+# Terraform
+terraform/.terraform/
+terraform/*.tfstate
+terraform/*.tfstate.*
+terraform/*.tfvars
+terraform/.terraform.lock.hcl
+
+# Keep the example
+!terraform/terraform.tfvars.example
+
+# AWS
+.aws/
+
+# Secrets
+*.pem
+*.key
+secrets/
