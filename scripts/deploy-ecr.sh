@@ -1,47 +1,50 @@
 #!/bin/bash
-# Quick AWS Deployment Script
-# This script automates the basic deployment steps
+# Deploy to AWS ECR
+# Usage: ./scripts/deploy-ecr.sh
 
 set -e
 
-# Configuration - UPDATE THESE
-export AWS_REGION="eu-north-1"
-export PROJECT_NAME="research-report"
-export AWS_ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+# Configuration
+AWS_REGION="eu-north-1"
+AWS_ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+ECR_BACKEND_REPO="research-report-backend"
+ECR_FRONTEND_REPO="research-report-frontend"
 
-echo "=== AWS Account: $AWS_ACCOUNT_ID ==="
-echo "=== Region: $AWS_REGION ==="
+echo "=========================================="
+echo "AWS Account: $AWS_ACCOUNT_ID"
+echo "Region: $AWS_REGION"
+echo "=========================================="
 
-# Step 1: Create ECR repositories
+# Create ECR repositories if they don't exist
 echo "Creating ECR repositories..."
-aws ecr create-repository --repository-name ${PROJECT_NAME}-backend --region $AWS_REGION 2>/dev/null || echo "Backend repo exists"
-aws ecr create-repository --repository-name ${PROJECT_NAME}-frontend --region $AWS_REGION 2>/dev/null || echo "Frontend repo exists"
+aws ecr describe-repositories --repository-names $ECR_BACKEND_REPO --region $AWS_REGION 2>/dev/null || \
+    aws ecr create-repository --repository-name $ECR_BACKEND_REPO --region $AWS_REGION
 
-# Step 2: Login to ECR
-echo "Logging into ECR..."
+aws ecr describe-repositories --repository-names $ECR_FRONTEND_REPO --region $AWS_REGION 2>/dev/null || \
+    aws ecr create-repository --repository-name $ECR_FRONTEND_REPO --region $AWS_REGION
+
+# Login to ECR
+echo "Logging in to ECR..."
 aws ecr get-login-password --region $AWS_REGION | docker login --username AWS --password-stdin $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com
 
-# Step 3: Build and push images
+# Build and push backend
 echo "Building backend image..."
-docker build -t ${PROJECT_NAME}-backend:latest -f Dockerfile .
+docker build -t $ECR_BACKEND_REPO:latest -f Dockerfile .
 
+echo "Tagging and pushing backend..."
+docker tag $ECR_BACKEND_REPO:latest $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_BACKEND_REPO:latest
+docker push $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_BACKEND_REPO:latest
+
+# Build and push frontend
 echo "Building frontend image..."
-docker build -t ${PROJECT_NAME}-frontend:latest -f Dockerfile.frontend .
+docker build -t $ECR_FRONTEND_REPO:latest -f Dockerfile.frontend .
 
-echo "Tagging images..."
-docker tag ${PROJECT_NAME}-backend:latest $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/${PROJECT_NAME}-backend:latest
-docker tag ${PROJECT_NAME}-frontend:latest $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/${PROJECT_NAME}-frontend:latest
+echo "Tagging and pushing frontend..."
+docker tag $ECR_FRONTEND_REPO:latest $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_FRONTEND_REPO:latest
+docker push $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_FRONTEND_REPO:latest
 
-echo "Pushing images to ECR..."
-docker push $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/${PROJECT_NAME}-backend:latest
-docker push $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/${PROJECT_NAME}-frontend:latest
-
-echo "=== Images pushed successfully ==="
-echo ""
-echo "Next steps (manual via AWS Console):"
-echo "1. Create RDS PostgreSQL instance"
-echo "2. Create ElastiCache Redis cluster"  
-echo "3. Create ECS cluster and services"
-echo "4. Create ALB with target groups"
-echo ""
-echo "See docs/AWS_DEPLOYMENT.md for detailed instructions"
+echo "=========================================="
+echo "Done! Images pushed to ECR:"
+echo "  Backend:  $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_BACKEND_REPO:latest"
+echo "  Frontend: $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_FRONTEND_REPO:latest"
+echo "=========================================="

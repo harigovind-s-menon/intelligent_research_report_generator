@@ -4,9 +4,10 @@ import streamlit as st
 import requests
 import time
 from datetime import datetime
+import os
 
 # Configuration
-API_URL = st.sidebar.text_input("API URL", value="http://localhost:8000")
+API_URL = os.getenv("API_URL", "http://localhost:8000")
 
 # Page config
 st.set_page_config(

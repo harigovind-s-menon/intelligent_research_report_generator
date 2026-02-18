@@ -1,0 +1,14 @@
+# Terraform variables - FILL IN YOUR VALUES
+# Copy this to terraform.tfvars and add your secrets
+
+aws_region = "eu-north-1"
+project_name = "research-report"
+environment = "prod"
+
+# Database password (choose a strong password)
+db_password = "YOUR_SECURE_PASSWORD_HERE"
+
+# API Keys (from your .env file)
+openai_api_key = "sk-..."
+tavily_api_key = "tvly-..."
+langsmith_api_key = "lsv2_pt_..."

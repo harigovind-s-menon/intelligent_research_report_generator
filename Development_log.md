@@ -17,6 +17,24 @@ A production-ready system that generates comprehensive, well-sourced research re
 
 ---
 
+## Project Status Summary
+
+| Phase | Status | Dates |
+|-------|--------|-------|
+| Phase 1: Foundation | ✅ Complete | Feb 5-6, 2026 |
+| Phase 2: Traditional ML | ✅ Complete | Feb 12, 2026 |
+| Phase 3: Evaluation Pipeline | ✅ Complete | Feb 12, 2026 |
+| Test Suite | ✅ Complete (73 tests) | Feb 13, 2026 |
+| LangSmith Tracing | ✅ Working | Feb 13, 2026 |
+| AWS Deployment | ✅ Complete | Feb 17-18, 2026 |
+
+**Live URLs:**
+- Frontend: http://research-report-alb-2064123991.eu-north-1.elb.amazonaws.com
+- API Docs: http://research-report-alb-2064123991.eu-north-1.elb.amazonaws.com/docs
+- Health Check: http://research-report-alb-2064123991.eu-north-1.elb.amazonaws.com/health
+
+---
+
 ## Phase 1: Foundation ✅
 
 **Status:** Complete  
@@ -655,6 +673,160 @@ tests/test_agent.py ... [100%]
 
 ---
 
+## AWS Deployment ✅
+
+**Status:** Complete  
+**Dates:** Feb 17-18, 2026
+
+### Architecture
+
+```
+                    ┌─────────────────────────────────────────────────┐
+                    │              Application Load Balancer          │
+                    │     (research-report-alb-2064123991)            │
+Internet ──────────▶│     ┌─────────────────┐    ┌────────────────┐  │
+                    │     │ /research*,     │    │ /* (default)   │  │
+                    │     │ /health, /docs  │    │ → Frontend     │  │
+                    │     │ → Backend       │    │   :8501        │  │
+                    │     │   :8000         │    │                │  │
+                    │     └─────────────────┘    └────────────────┘  │
+                    └─────────────────────────────────────────────────┘
+                                        │
+                    ┌───────────────────┴───────────────────┐
+                    ▼                                       ▼
+            ┌─────────────────┐                   ┌─────────────────┐
+            │  ECS Fargate    │                   │  ECS Fargate    │
+            │  Backend        │                   │  Frontend       │
+            │  (FastAPI)      │                   │  (Streamlit)    │
+            │  0.5 vCPU, 1GB  │                   │  0.25 vCPU,     │
+            └────────┬────────┘                   │  0.5GB          │
+                     │                            └─────────────────┘
+         ┌───────────┴───────────┐
+         ▼                       ▼
+┌─────────────────┐     ┌─────────────────┐
+│      RDS        │     │   ElastiCache   │
+│   PostgreSQL    │     │     Redis       │
+│   16.6 + pgvector│    │                 │
+│   db.t3.micro   │     │  cache.t3.micro │
+└─────────────────┘     └─────────────────┘
+```
+
+### Infrastructure (Terraform)
+
+All infrastructure managed via Terraform in `terraform/main.tf`:
+
+| Resource | Spec | Purpose |
+|----------|------|---------|
+| VPC | 10.0.0.0/16 | Isolated network |
+| Subnets | 2 public, 2 private | High availability |
+| NAT Gateway | 1 | Outbound internet for private subnets |
+| ALB | Internet-facing | Traffic routing |
+| ECS Cluster | Fargate | Container orchestration |
+| RDS PostgreSQL | db.t3.micro, v16.6 | Database with pgvector |
+| ElastiCache Redis | cache.t3.micro | Caching |
+| CloudWatch Logs | 7-day retention | Logging |
+
+### Deployment Commands
+
+```powershell
+# Deploy infrastructure
+cd terraform
+terraform init
+terraform apply
+
+# Build and push Docker images
+$AWS_ACCOUNT_ID = aws sts get-caller-identity --query Account --output text
+$password = aws ecr get-login-password --region eu-north-1
+docker login --username AWS --password $password "$AWS_ACCOUNT_ID.dkr.ecr.eu-north-1.amazonaws.com"
+
+docker build -t research-report-backend:latest -f Dockerfile .
+docker tag research-report-backend:latest "$AWS_ACCOUNT_ID.dkr.ecr.eu-north-1.amazonaws.com/research-report-backend:latest"
+docker push "$AWS_ACCOUNT_ID.dkr.ecr.eu-north-1.amazonaws.com/research-report-backend:latest"
+
+docker build -t research-report-frontend:latest -f Dockerfile.frontend .
+docker tag research-report-frontend:latest "$AWS_ACCOUNT_ID.dkr.ecr.eu-north-1.amazonaws.com/research-report-frontend:latest"
+docker push "$AWS_ACCOUNT_ID.dkr.ecr.eu-north-1.amazonaws.com/research-report-frontend:latest"
+
+# Force redeploy after image update
+aws ecs update-service --cluster research-report-cluster --service research-report-backend --force-new-deployment --region eu-north-1
+aws ecs update-service --cluster research-report-cluster --service research-report-frontend --force-new-deployment --region eu-north-1
+```
+
+### Cost Management
+
+**Estimated Monthly Cost: ~$105**
+
+| Service | Cost |
+|---------|------|
+| NAT Gateway | ~$35 |
+| ALB | ~$20 |
+| RDS (db.t3.micro) | ~$15 |
+| ECS Fargate | ~$23 |
+| ElastiCache | ~$12 |
+
+**Stop/Start Commands:**
+
+```powershell
+# Scale ECS to zero (saves ~$23/mo, keeps infrastructure)
+aws ecs update-service --cluster research-report-cluster --service research-report-backend --desired-count 0 --region eu-north-1
+aws ecs update-service --cluster research-report-cluster --service research-report-frontend --desired-count 0 --region eu-north-1
+
+# Scale back up
+aws ecs update-service --cluster research-report-cluster --service research-report-backend --desired-count 1 --region eu-north-1
+aws ecs update-service --cluster research-report-cluster --service research-report-frontend --desired-count 1 --region eu-north-1
+
+# Destroy everything (stops all billing)
+cd terraform
+terraform destroy
+```
+
+### Monitoring
+
+```powershell
+# View backend logs
+aws logs tail /ecs/research-report-backend --region eu-north-1 --follow
+
+# View frontend logs
+aws logs tail /ecs/research-report-frontend --region eu-north-1 --follow
+
+# Check service status
+aws ecs describe-services --cluster research-report-cluster --services research-report-backend research-report-frontend --region eu-north-1 --query "services[].{name:serviceName,running:runningCount,desired:desiredCount}"
+```
+
+### Issues & Fixes
+
+1. **PostgreSQL version not available**
+   - Problem: `Cannot find version 16.3 for postgres`
+   - Fix: Changed to `engine_version = "16.6"` in Terraform
+
+2. **Missing HUGGINGFACE_API_KEY**
+   - Problem: Container crashed with pydantic validation error
+   - Fix: Added `huggingface_api_key` variable to Terraform and tfvars
+
+3. **Frontend using localhost**
+   - Problem: Streamlit was connecting to localhost instead of ALB
+   - Fix: `API_URL` environment variable correctly set in Terraform task definition
+
+4. **ECR login expired**
+   - Problem: `403 Forbidden` on docker push
+   - Fix: Re-run ECR login before pushing
+
+---
+
+## LangSmith Integration ✅
+
+**Status:** Working  
+**Project:** research-report-generator
+
+LangSmith traces all LangGraph executions automatically via environment variables:
+- `LANGCHAIN_TRACING_V2=true`
+- `LANGCHAIN_PROJECT=research-report-generator`
+- `LANGSMITH_API_KEY=lsv2_pt_...`
+
+View traces at: https://smith.langchain.com
+
+---
+
 ## Technical Decisions Log
 
 ### Decision 1: LangGraph vs. Custom Agent
@@ -774,6 +946,16 @@ tests/test_agent.py ... [100%]
 - Well-structured report can compensate for minor retrieval gaps
 - Grounding ensures factual accuracy, critical for trust
 - Balanced approach that values end output while maintaining quality standards
+
+### Decision 14: Terraform for Infrastructure
+**Date:** Feb 17, 2026  
+**Decision:** Terraform IaC  
+**Rationale:** Reproducible, version-controlled, one-command deploy/destroy
+
+### Decision 15: ECS Fargate vs. EC2
+**Date:** Feb 17, 2026  
+**Decision:** Fargate  
+**Rationale:** Serverless containers, no instance management, scales to zero
 
 ---
 
